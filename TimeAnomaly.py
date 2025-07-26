@@ -129,7 +129,7 @@ class EmailAlertChannel:
         self.username = username
         self.password = password
 
-    async def send_alert(self, alert: AnomalyAlert, recipients: List[str]) -> bool:
+    def send_alert(self, alert: AnomalyAlert, recipients: List[str]) -> bool:
         """
         Send anomaly alert via email.
 
@@ -826,7 +826,7 @@ class AnomalyDetectionEngine:
                 api_url=sms_config['api_url']
             ))
 
-    async def process_streaming_data(self, data_stream: SparkDataFrame) -> None:
+    def process_streaming_data(self, data_stream: SparkDataFrame) -> None:
         """
         Process streaming data for anomaly detection.
 
