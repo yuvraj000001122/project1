@@ -225,18 +225,17 @@ class SMSAlertChannel:
         Returns:
             True if SMS sent successfully, False otherwise
         """
-        if alert.severity not in [SeverityLevel.HIGH, SeverityLevel.CRITICAL]:
-            return True  # Only send SMS for high/critical alerts
-
-        try:
-            message = self._format_sms_message(alert)
-            # Implementation would depend on your SMS service provider
-            # This is a placeholder for the actual SMS API call
-            logging.info(f"SMS Alert sent: {message}")
-            return True
-        except Exception as e:
-            logging.error(f"Failed to send SMS alert: {e}")
-            return False
+        if alert.severity in [SeverityLevel.HIGH, SeverityLevel.CRITICAL]:
+            # send SMS
+            try:
+                message = self._format_sms_message(alert)
+                # Implementation would depend on your SMS service provider
+                logging.info(f"SMS Alert sent: {message}")
+                return True
+            except Exception as e:
+                logging.error(f"Failed to send SMS alert: {e}")
+                return False
+        return True # Only send SMS for high/critical alerts
 
     def _format_sms_message(self, alert: AnomalyAlert) -> str:
         """Format alert as SMS message."""
@@ -885,7 +884,7 @@ class AnomalyDetectionEngine:
         """Create an anomaly alert with root cause analysis."""
         try:
             # Determine severity based on confidence
-            severity = self._determine_severity(confidence, anomaly_row['value'])
+            severity = self._determine_severity(confidence)
 
             # Calculate expected range
             expected_range = self._calculate_expected_range(context_data)
@@ -921,7 +920,7 @@ class AnomalyDetectionEngine:
             logging.error(f"Error creating alert: {e}")
             return None
 
-    def _determine_severity(self, confidence: float, value: float) -> SeverityLevel:
+    def _determine_severity(self, confidence: float) -> SeverityLevel:
         """Determine alert severity based on confidence and context."""
         if confidence > 0.9:
             return SeverityLevel.CRITICAL
@@ -963,7 +962,7 @@ class AnomalyDetectionEngine:
             except Exception as e:
                 logging.error(f"Failed to send alert via {type(channel).__name__}: {e}")
 
-    def process_batch_data(self, file_path: str, sensor_id: str) -> List[AnomalyAlert]:
+    def process_batch_data(self, sensor_id: str) -> List[AnomalyAlert]:
         """
         Process batch data for anomaly detection.
 
@@ -972,7 +971,6 @@ class AnomalyDetectionEngine:
         Complexity: Time O(n), Space O(n)
 
         Args:
-            file_path: Path to the data file
             sensor_id: Identifier for the sensor
 
         Returns:
@@ -1070,7 +1068,7 @@ def main():
 
     try:
         # Example: Process batch data
-        alerts = engine.process_batch_data('data', 'meter_001')
+        alerts = engine.process_batch_data('meter_001')
         print(f"Detected {len(alerts)} anomalies in batch data")
 
         # Example: Get health status
