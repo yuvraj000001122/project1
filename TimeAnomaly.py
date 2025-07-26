@@ -4,8 +4,9 @@ from matplotlib import pyplot as plt
 import io
 import base64
 
-ys = 200 + np.random.randn(100)
-x = [x for x in range(len(ys))]
+rng = np.random.default_rng()
+ys = 200 + rng.standard_normal(100)
+x = list(range(len(ys)))
 
 fig = plt.figure(figsize=(4, 3), facecolor='w')
 plt.plot(x, ys, '-')
@@ -189,7 +190,7 @@ Metadata:
     def _format_feature_attribution(self, attribution: Dict[str, float]) -> str:
         """Format feature attribution scores."""
         sorted_features = sorted(attribution.items(), key=lambda x: abs(x[1]), reverse=True)
-        return '\n'.join([f"- {feature}: {score:.3f}" for feature, score in sorted_features[:5]])
+        return '\n'.join(f"- {feature}: {score:.3f}" for feature, score in sorted_features[:5])
 
 
 class SMSAlertChannel:
@@ -210,7 +211,7 @@ class SMSAlertChannel:
         self.api_key = api_key
         self.api_url = api_url
 
-    async def send_alert(self, alert: AnomalyAlert, phone_numbers: List[str]) -> bool:
+    def send_alert(self, alert: AnomalyAlert) -> bool:
         """
         Send SMS alert for critical anomalies.
 
@@ -220,7 +221,6 @@ class SMSAlertChannel:
 
         Args:
             alert: The anomaly alert to send
-            phone_numbers: List of phone numbers to notify
 
         Returns:
             True if SMS sent successfully, False otherwise
@@ -385,14 +385,14 @@ class StatisticalAnomalyDetector(AnomalyDetector):
 
         # Z-score based detection
         z_scores = np.abs(stats.zscore(values))
-        z_anomalies = np.where(z_scores > self.z_threshold)[0]
+        z_anomalies = np.nonzero(z_scores > self.z_threshold)[0]
 
         # IQR based detection
         q1, q3 = np.percentile(values, [25, 75])
         iqr = q3 - q1
         lower_bound = q1 - self.iqr_multiplier * iqr
         upper_bound = q3 + self.iqr_multiplier * iqr
-        iqr_anomalies = np.where((values < lower_bound) | (values > upper_bound))[0]
+        iqr_anomalies = np.nonzero((values < lower_bound) | (values > upper_bound))[0]
 
         # Combine detections
         all_anomaly_indices = set(z_anomalies) | set(iqr_anomalies)
@@ -453,7 +453,7 @@ class IsolationForestDetector(AnomalyDetector):
         self.model.fit(X)
 
         predictions = self.model.predict(X)
-        anomaly_indices = np.where(predictions == -1)[0]
+        anomaly_indices = np.nonzero(predictions == -1)[0]
 
         # Calculate confidence scores (lower decision function score means more anomalous)
         scores = self.model.decision_function(X)
@@ -468,17 +468,18 @@ class IsolationForestDetector(AnomalyDetector):
         if self.model is None:
             return {}
 
-        feature_cols = [col for col in data.columns if col not in ['timestamp', 'sensor_id']]
+        feature_cols = [col for col in self.model.feature_names_in_ if col not in ['timestamp', 'sensor_id']]
 
         # Approximate feature importance by permutation
         importance = {}
-        X = data[feature_cols].values
+        X = self.model.transform(data[feature_cols])
         baseline_score = np.mean(self.model.decision_function(X))
 
+        rng = np.random.default_rng()  # Use Generator for shuffling
         for i, col in enumerate(feature_cols):
-            X_permuted = X.copy()
-            np.random.shuffle(X_permuted[:, i])
-            permuted_score = np.mean(self.model.decision_function(X_permuted))
+            x_permuted = X.copy()
+            rng.shuffle(x_permuted[:, i])
+            permuted_score = np.mean(self.model.decision_function(x_permuted))
             importance[col] = abs(baseline_score - permuted_score)
 
         return importance
@@ -737,7 +738,7 @@ class RootCauseAnalyzer:
 
         # Compare to same time yesterday
         same_time_yesterday = data.iloc[-24]['value'] if len(data) >= 24 else None
-        if same_time_yesterday:
+        if same_time_yesterday is not None:
             change_pct = ((alert.value - same_time_yesterday) / same_time_yesterday) * 100
             if abs(change_pct) > 20:
                 return f"Value changed by {change_pct:.1f}% compared to same time yesterday"
@@ -867,7 +868,7 @@ class AnomalyDetectionEngine:
 
             # Generate alerts for detected anomalies
             for idx, confidence, anomaly_type in anomalies:
-                alert = await self._create_alert(
+                alert = self._create_alert(
                     sensor_id, processed_data.iloc[idx],
                     confidence, anomaly_type, processed_data
                 )
@@ -878,13 +879,13 @@ class AnomalyDetectionEngine:
         except Exception as e:
             logging.error(f"Error processing sensor {sensor_id}: {e}")
 
-    async def _create_alert(self, sensor_id: str, anomaly_row: pd.Series,
+    def _create_alert(self, sensor_id: str, anomaly_row: pd.Series,
                           confidence: float, anomaly_type: AnomalyType,
                           context_data: pd.DataFrame) -> Optional[AnomalyAlert]:
         """Create an anomaly alert with root cause analysis."""
         try:
-            # Determine severity based on confidence and anomaly type
-            severity = self._determine_severity(confidence, anomaly_type, anomaly_row['value'])
+            # Determine severity based on confidence
+            severity = self._determine_severity(confidence, anomaly_row['value'])
 
             # Calculate expected range
             expected_range = self._calculate_expected_range(context_data)
@@ -920,8 +921,7 @@ class AnomalyDetectionEngine:
             logging.error(f"Error creating alert: {e}")
             return None
 
-    def _determine_severity(self, confidence: float, anomaly_type: AnomalyType,
-                          value: float) -> SeverityLevel:
+    def _determine_severity(self, confidence: float, value: float) -> SeverityLevel:
         """Determine alert severity based on confidence and context."""
         if confidence > 0.9:
             return SeverityLevel.CRITICAL
@@ -958,12 +958,12 @@ class AnomalyDetectionEngine:
                 elif isinstance(channel, SMSAlertChannel):
                     phone_numbers = recipients.get('sms', [])
                     if phone_numbers:
-                        await channel.send_alert(alert, phone_numbers)
+                        channel.send_alert(alert)
 
             except Exception as e:
                 logging.error(f"Failed to send alert via {type(channel).__name__}: {e}")
 
-    async def process_batch_data(self, file_path: str, sensor_id: str) -> List[AnomalyAlert]:
+    def process_batch_data(self, file_path: str, sensor_id: str) -> List[AnomalyAlert]:
         """
         Process batch data for anomaly detection.
 
@@ -991,7 +991,7 @@ class AnomalyDetectionEngine:
             # Create alerts
             alerts = []
             for idx, confidence, anomaly_type in anomalies:
-                alert = await self._create_alert(
+                alert = self._create_alert(
                     sensor_id, processed_data.iloc[idx],
                     confidence, anomaly_type, processed_data
                 )
@@ -1056,7 +1056,7 @@ def create_engine_config() -> Dict[str, Any]:
     }
 
 
-async def main():
+def main():
     """
     Example main function showing how to use the anomaly detection engine.
 
@@ -1070,7 +1070,7 @@ async def main():
 
     try:
         # Example: Process batch data
-        alerts = await engine.process_batch_data('data', 'meter_001')
+        alerts = engine.process_batch_data('data', 'meter_001')
         print(f"Detected {len(alerts)} anomalies in batch data")
 
         # Example: Get health status
@@ -1082,7 +1082,7 @@ async def main():
         #     .option("kafka.bootstrap.servers", "localhost:9092") \
         #     .option("subscribe", "sensor_data") \
         #     .load()
-        # await engine.process_streaming_data(spark_stream)
+        # asyncio.run(engine.process_streaming_data(spark_stream))
 
     finally:
         # Cleanup
@@ -1090,7 +1090,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    await main()
+    main()
 
 
 display.display(display.Markdown(F"""![{alt}]({image})"""))
