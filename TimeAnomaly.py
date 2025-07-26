@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import io
 import base64
 
-rng = np.random.default_rng()
+rng = np.random.default_rng(42)
 ys = 200 + rng.standard_normal(100)
 x = list(range(len(ys)))
 
@@ -102,7 +102,7 @@ class AnomalyAlert:
 class AlertChannel(Protocol):
     """Protocol for alert notification channels."""
 
-    async def send_alert(self, alert: AnomalyAlert) -> bool:
+    def send_alert(self, alert: AnomalyAlert) -> bool:
         """Send an alert through this channel."""
         ...
 
@@ -474,7 +474,7 @@ class IsolationForestDetector(AnomalyDetector):
         X = self.model.transform(data[feature_cols])
         baseline_score = np.mean(self.model.decision_function(X))
 
-        rng = np.random.default_rng()  # Use Generator for shuffling
+        rng = np.random.default_rng(42)  # Use Generator for shuffling
         for i, col in enumerate(feature_cols):
             x_permuted = X.copy()
             rng.shuffle(x_permuted[:, i])
@@ -709,7 +709,7 @@ class RootCauseAnalyzer:
         }
         return explanations.get(feature, f"{feature} shows anomalous behavior (impact: {importance:.2f})")
 
-    def _apply_domain_rules(self, alert: AnomalyAlert, data: pd.DataFrame) -> List[str]:
+    def _apply_domain_rules(self, alert: AnomalyAlert, data) -> List[str]:
         """Apply energy domain-specific rules."""
         insights = []
 
@@ -732,17 +732,22 @@ class RootCauseAnalyzer:
 
     def _analyze_temporal_context(self, alert: AnomalyAlert, data: pd.DataFrame) -> str:
         """Analyze temporal context of the anomaly."""
-        if len(data) < 24:
-            return ""
+        # Look for comparison points at different intervals
+        comparisons = []
 
-        # Compare to same time yesterday
-        same_time_yesterday = data.iloc[-24]['value'] if len(data) >= 24 else None
-        if same_time_yesterday is not None:
-            change_pct = ((alert.value - same_time_yesterday) / same_time_yesterday) * 100
-            if abs(change_pct) > 20:
-                return f"Value changed by {change_pct:.1f}% compared to same time yesterday"
+        for hours_back, label in [(24, "same time yesterday"), (168, "same time last week")]:
+            if len(data) >= hours_back:
+                try:
+                    past_value = data.iloc[-hours_back]['value']
+                    if pd.notna(past_value) and past_value != 0:
+                        change_pct = ((alert.value - past_value) / past_value) * 100
+                        if abs(change_pct) > 20:
+                            comparisons.append(f"Value changed by {change_pct:.1f}% compared to {label}")
+                except (IndexError, ZeroDivisionError):
+                    continue
 
-        return ""
+        return "; ".join(comparisons) if comparisons else ""
+
 
     def _initialize_domain_rules(self) -> Dict[str, Any]:
         """Initialize domain-specific rules for energy utilities."""
@@ -832,18 +837,29 @@ class AnomalyDetectionEngine:
         Args:
             data_stream: Spark streaming DataFrame with sensor data
         """
-        def process_batch(batch_df: SparkDataFrame, batch_id: int) -> None:
-            """Process each micro-batch of streaming data."""
+
+        async def process_batch_async(batch_df: SparkDataFrame, batch_id: int) -> None:
+            """Process each micro-batch of streaming data asynchronously."""
             try:
                 # Convert to Pandas for processing
                 pandas_df = batch_df.toPandas()
 
-                # Group by sensor_id and process each sensor separately
-                for sensor_id, sensor_data in pandas_df.groupby('sensor_id'):
-                    asyncio.create_task(self._process_sensor_data(sensor_id, sensor_data))
+                # Create tasks for concurrent sensor processing
+                tasks = [
+                    self._process_sensor_data(sensor_id, sensor_data)
+                    for sensor_id, sensor_data in pandas_df.groupby('sensor_id')
+                ]
+
+                # Process all sensors concurrently and wait for completion
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
 
             except Exception as e:
                 logging.error(f"Error processing batch {batch_id}: {e}")
+
+        def process_batch(batch_df: SparkDataFrame, batch_id: int) -> None:
+            """Synchronous wrapper for Spark compatibility."""
+            asyncio.run(process_batch_async(batch_df, batch_id))
 
         # Start streaming query
         query = data_stream.writeStream \
@@ -852,6 +868,7 @@ class AnomalyDetectionEngine:
             .start()
 
         query.awaitTermination()
+
 
     async def _process_sensor_data(self, sensor_id: str, data: pd.DataFrame) -> None:
         """Process data from a single sensor."""
