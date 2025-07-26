@@ -658,7 +658,7 @@ class RootCauseAnalyzer:
         self.domain_rules = self._initialize_domain_rules()
 
     def analyze(self, alert: AnomalyAlert, data: pd.DataFrame,
-                feature_importance: Dict[str, float]) -> str:
+            feature_importance: Dict[str, float]) -> str:
         """
         Generate root cause analysis summary.
 
@@ -674,29 +674,8 @@ class RootCauseAnalyzer:
         Returns:
             Human-readable root cause summary
         """
-        summary_parts = []
+        pass
 
-        # Analyze top contributing features
-        top_features = sorted(feature_importance.items(),
-                            key=lambda x: abs(x[1]), reverse=True)[:3]
-
-        if top_features:
-            summary_parts.append("Primary contributing factors:")
-            for feature, importance in top_features:
-                explanation = self._explain_feature(feature, importance)
-                summary_parts.append(f"- {explanation}")
-
-        # Apply domain-specific rules
-        domain_insights = self._apply_domain_rules(alert, data)
-        if domain_insights:
-            summary_parts.extend(domain_insights)
-
-        # Add temporal context
-        temporal_context = self._analyze_temporal_context(alert, data)
-        if temporal_context:
-            summary_parts.append(temporal_context)
-
-        return "\n".join(summary_parts)
 
     def _explain_feature(self, feature: str, importance: float) -> str:
         """Explain what a feature means in domain terms."""
@@ -709,7 +688,7 @@ class RootCauseAnalyzer:
         }
         return explanations.get(feature, f"{feature} shows anomalous behavior (impact: {importance:.2f})")
 
-    def _apply_domain_rules(self, alert: AnomalyAlert, data) -> List[str]:
+    def _apply_domain_rules(self, alert: AnomalyAlert) -> List[str]:
         """Apply energy domain-specific rules."""
         insights = []
 
@@ -729,6 +708,7 @@ class RootCauseAnalyzer:
             insights.append("Winter period anomaly - possible heating system issue")
 
         return insights
+
 
     def _analyze_temporal_context(self, alert: AnomalyAlert, data: pd.DataFrame) -> str:
         """Analyze temporal context of the anomaly."""
